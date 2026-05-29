@@ -3,9 +3,11 @@
 Status: ready-for-agent
 
 > Scope note: This PRD covers the **browser-side** integration in the `lll`
-> Vite/TypeScript app plus a **Vite dev token endpoint**. The Python
-> `livekit-agents` brain (`brain.py` / `agent.py`) is a **separate service**
-> (out of scope here); we only pin the JSON contract it must speak. Source spec:
+> Vite/TypeScript app only. Room-join tokens are minted by an **external token
+> server** (run by the brain team) at `GET /token?room=<name>` → `{ token, url }`;
+> we never mint tokens or hold LiveKit secrets. The Python `livekit-agents` brain
+> (`brain.py` / `agent.py`) is a **separate service** (out of scope here); we only
+> pin the JSON contract it must speak. Source spec:
 > [voice-agent-spec](https://www.notion.so/labrys/voice-agent-spec-36fced2a7e1380a9a038c374d9ca953a).
 
 ## Problem Statement
@@ -98,13 +100,15 @@ still works for manual testing — and both feed a single shared movement step.
 23. As a developer, I want the browser to publish a sense snapshot after meaningful
     game events (connect, command applied, bounds hit), so that the agent's context
     stays fresh without flooding the channel every frame.
-24. As a developer, I want a LiveKit token from a local endpoint during `pnpm dev`,
-    so that I can run the whole loop locally without standing up a separate server.
-25. As a developer, I want the token endpoint to also ensure the agent is dispatched
-    to the room (idempotently), so that connecting the browser is enough to get a
-    working agent.
-26. As a developer, I want LiveKit credentials read from environment variables and
-    never shipped to the browser, so that secrets stay server-side.
+24. As a developer, I want the browser to fetch a LiveKit token from the external
+    token server (`GET /token?room=<name>`), so that I can run the whole loop
+    without standing up any token-minting server of my own.
+25. As a developer, I want the token-server base URL configured via a
+    `VITE_TOKEN_ENDPOINT` env var (a public URL, not a secret), so that the ngrok
+    tunnel rotating doesn't require a code change.
+26. As a developer, I want agent dispatch owned entirely by the external token
+    server / brain worker (not this repo), so that the game side has no LiveKit
+    credentials and no dispatch logic to maintain.
 27. As a developer, I want the agent audio `<audio>` elements cleaned up on
     track-unsubscribe and disconnect, so that duplicate/zombie voices don't stack up
     on reconnect.
@@ -169,29 +173,29 @@ movement to the new intent module.
   `stepMovement`, mounts the HUD Connect/Disconnect + state/subtitle, and owns
   the `agentSession` lifecycle.
 
-### Server / tooling
+### Token server / tooling
 
-- **Vite dev token endpoint (`POST /api/token`)** — implemented as Vite dev
-  middleware in `vite.config.ts` (Node side, has access to env). It:
-  1. Mints a LiveKit JWT (room-join grant) with `livekit-server-sdk`.
-  2. **Optionally** dispatches the agent: only when `LIVEKIT_AGENT_NAME` is set
-     (the brain team's **registered agent name** — see inter-team note), via
-     `AgentDispatchClient` — `listDispatches` first, `createDispatch` only if
-     absent (avoids duplicate agents/voices on reconnect). When the name is
-     unset, dispatch is **skipped** and development proceeds against the mock
-     injector. This keeps dispatch off the critical path until the brain exists.
-  3. Returns `{ token, url }`.
-  Credentials are confirmed available (`LIVEKIT_URL`/`KEY`/`SECRET` in hand), so
-  this real endpoint is the chosen path (no sandbox/hardcoded token). Production
-  deployment (serverless) is **out of scope**; the core (mint + dispatch) is
-  structured to lift into a serverless function later.
-- **New runtime deps:** `livekit-client` (browser), `livekit-server-sdk`
-  (dev middleware). **New dev dep:** `vitest` (test runner — none exists today).
-  Installed with **pnpm** (repo uses `pnpm-lock.yaml`; do not run npm).
-- **Env vars** (read server-side only; never exposed to the browser bundle):
-  `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`. When absent, the
-  token endpoint returns a clear error and the browser disables Connect with an
-  explanatory HUD status.
+- **External token server (not ours)** — an existing server, run by the brain
+  team, mints the room-join JWT and owns agent dispatch:
+  ```
+  GET <endpoint>/token?room=<name>  →  { "token": "<JWT>", "url": "wss://<project>.livekit.cloud" }
+  ```
+  This repo holds **no LiveKit secrets, no `livekit-server-sdk`, and no
+  token-minting or dispatch code**. We removed the planned Vite `POST /api/token`
+  middleware — there is nothing to mint or dispatch on our side.
+- **Browser `fetchToken(room)` helper** — issues `GET <base>/token?room=<name>`
+  and returns either `{ token, url }` or a typed **"unavailable"** outcome
+  (missing env / network error / non-200 / malformed body); it never throws. The
+  HUD reads this seam to decide whether Connect is enabled.
+- **New runtime deps:** `livekit-client` (browser) only. **New dev dep:**
+  `vitest` (test runner — none exists today). Installed with **pnpm** (repo uses
+  `pnpm-lock.yaml`; do not run npm). No `livekit-server-sdk`.
+- **Env var** (browser-exposed, **not a secret**): `VITE_TOKEN_ENDPOINT` — the
+  base URL of the external token server (the ngrok tunnel). `VITE_`-prefixed so
+  Vite exposes it to the client; documented in `.env.example` with the current
+  ngrok URL as the default so the tunnel rotating doesn't require a code edit.
+  When unset (or the endpoint errors), `fetchToken` returns "unavailable" and the
+  browser disables Connect with an explanatory HUD status.
 
 ### Wire contract (browser ⇄ agent) — SHARED INTER-TEAM INTERFACE
 
@@ -296,8 +300,9 @@ are plain Vitest on pure functions and need no DOM.
 - The **Python `livekit-agents` brain** (`brain.py`, `agent.py`, system prompt,
   Deepgram STT, Cartesia TTS, Claude wiring). Separate service; this PRD only
   pins the JSON wire contract it must honor.
-- **Production deployment** of the token endpoint as a serverless function, and
-  any Vercel/infra changes beyond the local Vite dev middleware.
+- **Token minting and agent dispatch** — owned by the external token server / the
+  brain team. This repo never mints JWTs, holds LiveKit secrets, or dispatches
+  agents; no serverless function or token-endpoint deployment is in scope.
 - The **puzzle layer** (objects, goals, win conditions) from the roadmap. The
   `nearby` sense field is specified but ships empty for the baseline sandbox.
 - New **tools beyond the five** (pivot left, pivot right, forwards, stop, speech)
@@ -309,11 +314,12 @@ are plain Vitest on pure functions and need no DOM.
 ## Further Notes
 
 - **livekit-agents 1.5.x gotchas** (from the spec) apply to the separate Python
-  service, but the browser/token side must cooperate: the token endpoint must use
-  explicit `AgentDispatchClient.createDispatch()` (passive auto-dispatch is gone),
-  and should `listDispatches` before creating to avoid duplicate agents/voices.
-  On the browser, clean up attached `<audio>` elements on track-unsubscribe and
-  on disconnect to prevent stacked voices on reconnect.
+  service and the **external token server** — dispatch must use explicit
+  `AgentDispatchClient.createDispatch()` (passive auto-dispatch is gone), ideally
+  `listDispatches` first to avoid duplicate agents/voices. That is **the external
+  server's responsibility, not ours.** On the browser, our only related duty is to
+  clean up attached `<audio>` elements on track-unsubscribe and on disconnect to
+  prevent stacked voices on reconnect.
 - **`startAudio()` must be called inside a user gesture** — hence the explicit
   Connect button (user story 1). Autoplay of agent audio depends on it.
 - Keep **`.ts` extensions in imports** and `import * as THREE from 'three'` /
