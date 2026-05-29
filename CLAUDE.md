@@ -55,3 +55,17 @@ Several projects ship **without their art assets** (license-restricted, e.g. the
 ## Per-project docs
 
 Each project keeps its own `README.md` (setup, asset attribution, credits), and `oakwoods` has its own detailed `CLAUDE.md` covering Phaser game config, scene flow, the player animation state machine, and infinite-world generation — read it before working in that project. `forest-census/public/forest/` also contains `PRD.md` and `TDD.md` design docs.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs live as markdown files under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles use their default string names (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Multi-context: `CONTEXT-MAP.md` at the root indexes one `CONTEXT.md` per project under `projects/`. See `docs/agents/domain.md`.
