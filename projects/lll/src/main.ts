@@ -19,7 +19,8 @@ import {
   applyKeyboard,
   stepMovement,
 } from './movement.ts';
-import { parseCommand } from './commands.ts';
+import { parseCommand, type ParseResult } from './commands.ts';
+import { installMockInjector } from './mockInjector.ts';
 
 // ---- DOM ----------------------------------------------------------------
 
@@ -391,22 +392,15 @@ function loop(): void {
   renderer.render(scene, camera);
 }
 
-// Dev-only injection seam: feeds the exact data-channel JSON the brain will send
-// through `parseCommand` -> `applyCommand`, so the whole game-side command path
-// can be exercised before LiveKit exists. Compiled out of production builds.
-declare global {
-  interface Window {
-    __inject?: (raw: unknown) => void;
-  }
-}
-
-function installDevInjector(): void {
-  if (!import.meta.env.DEV) return;
-  window.__inject = (raw: unknown): void => {
-    const result = parseCommand(raw);
-    if (result.ok) intent = applyCommand(intent, result.command);
-    else console.warn('[__inject] rejected command:', result.error);
-  };
+// Injection seam: route one raw data-channel command (the exact JSON the brain
+// will send) through `parseCommand` -> `applyCommand` into the live intent, and
+// return the parse result so the mock injector can surface rejections. This is
+// the single code path from JSON to intent shared by the panel buttons, the raw
+// box, and `window.__inject`.
+function injectCommand(raw: unknown): ParseResult {
+  const result = parseCommand(raw);
+  if (result.ok) intent = applyCommand(intent, result.command);
+  return result;
 }
 
 async function bootstrap(): Promise<void> {
@@ -418,7 +412,7 @@ async function bootstrap(): Promise<void> {
   createKey();
   const assetPaths = await loadManifest();
   await buildPlayer(assetPaths);
-  installDevInjector();
+  installMockInjector({ inject: injectCommand });
   dom.loading.classList.add('hidden');
   dom.status.textContent = 'ready — W drive · A/D pivot · S stop · Shift run';
   clock.start();
