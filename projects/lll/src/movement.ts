@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 
 import { PLAY_BOUNDS } from './config.ts';
+import { DEFAULT_SPEED, type AgentCommand } from './commands.ts';
 
 // Tank-style movement model. Pure: same inputs → same outputs, no Three.js
 // scene-graph or DOM. Both keyboard and (later, in 01c) agent commands fold
@@ -61,6 +62,30 @@ export function applyKeyboard(intent: ControlIntent, input: KeyboardInput): Cont
     drive: input.up && !input.down,
     run: input.run,
   };
+}
+
+// Fold an agent command into the shared intent. The command protocol is richer
+// than the binary intent (`pivot` carries signed degrees, `forward` carries
+// distance + speed), so this projects each command onto the continuous-until-
+// changed intent: each command fully sets the intent, persisting until the next.
+//   pivot   -> turn = sign(degrees), drive cleared (magnitude/exact angle not
+//              honored — the model has no target-angle/odometry).
+//   forward -> drive set, turn cleared; speed above the default selects run.
+//   stop    -> turn + drive cleared.
+//   speech  -> no movement effect (intent unchanged).
+export function applyCommand(intent: ControlIntent, command: AgentCommand): ControlIntent {
+  switch (command.kind) {
+    case 'pivot': {
+      const turn: -1 | 0 | 1 = command.degrees < 0 ? -1 : command.degrees > 0 ? 1 : 0;
+      return { turn, drive: false, run: intent.run };
+    }
+    case 'forward':
+      return { turn: 0, drive: true, run: command.speed > DEFAULT_SPEED };
+    case 'stop':
+      return { turn: 0, drive: false, run: false };
+    case 'speech':
+      return intent;
+  }
 }
 
 export function stepMovement(

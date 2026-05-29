@@ -5,13 +5,21 @@ import { loadManifest, loadGltf, type AssetPaths } from './manifest.ts';
 import {
   type Actor,
   yawFromDirection,
-  dampAngle,
   buildActionMap,
   pickActionName,
   playAction,
   normalizeToHeightAndGround,
   anchorMinYToGround,
 } from './helpers.ts';
+import {
+  type ControlIntent,
+  type KeyboardInput,
+  type MovementState,
+  applyCommand,
+  applyKeyboard,
+  stepMovement,
+} from './movement.ts';
+import { parseCommand } from './commands.ts';
 
 // ---- DOM ----------------------------------------------------------------
 
@@ -50,40 +58,37 @@ const clock = new THREE.Clock();
 
 // ---- Player + input state -----------------------------------------------
 
-interface InputState {
-  up: boolean;
-  down: boolean;
-  left: boolean;
-  right: boolean;
-  run: boolean;
-}
-
-const input: InputState = { up: false, down: false, left: false, right: false, run: false };
+// Raw keyboard state. Folded into the shared `intent` each frame via
+// `applyKeyboard`; shape matches the movement model's `KeyboardInput`.
+const input: KeyboardInput = { up: false, down: false, left: false, right: false, run: false };
 
 interface Player extends Actor {
   group: THREE.Group;
-  velocity: THREE.Vector3;
-  walkSpeed: number;
-  runSpeed: number;
-  accel: number;
-  decel: number;
-  forward: THREE.Vector3;
-  bobTimer: number;
   mixer: THREE.AnimationMixer | null;
 }
 
 const player: Player = {
   group: new THREE.Group(),
-  velocity: new THREE.Vector3(),
-  walkSpeed: 4.2,
-  runSpeed: 6.8,
-  accel: 18,
-  decel: 22,
-  forward: new THREE.Vector3(0, 0, -1),
-  bobTimer: 0,
   mixer: null,
   actions: new Map(),
   currentAction: null,
+};
+
+// The single shared control intent. Both keyboard (`applyKeyboard`) and injected
+// agent commands (`applyCommand`) fold into this same object; the keyboard
+// overrides the agent intent while a steering key is held, otherwise the agent
+// intent persists. `stepMovement` advances `motion` from it each frame.
+let intent: ControlIntent = { turn: 0, drive: false, run: false };
+
+// Pure pose/velocity state advanced by `stepMovement`. yaw 0 faces +Z (matches
+// the initial facing set in `buildPlayer`).
+const motion: MovementState = {
+  x: PLAYER_START.x,
+  z: PLAYER_START.z,
+  yaw: 0,
+  vx: 0,
+  vz: 0,
+  bob: 0,
 };
 
 const cameraRig = { targetX: 0, currentX: 0, edgeThreshold: 0.55 };
@@ -305,64 +310,59 @@ function handleKeyUp(event: KeyboardEvent): void {
 // ---- Update loop ---------------------------------------------------------
 
 function updatePlayer(dt: number): void {
-  const direction = new THREE.Vector3();
-  if (input.up) direction.z -= 1;
-  if (input.down) direction.z += 1;
-  if (input.left) direction.x -= 1;
-  if (input.right) direction.x += 1;
-  direction.normalize();
+  // Keyboard folds into the shared intent (overrides the agent intent while a
+  // steering key is held; otherwise leaves the agent intent untouched), then the
+  // pure model advances pose/velocity/bob/anim — including PLAY_BOUNDS clamping.
+  intent = applyKeyboard(intent, input);
+  const result = stepMovement(motion, intent, dt);
 
-  const moving = direction.lengthSq() > 0;
-  const running = moving && input.run;
-  const maxSpeed = running ? player.runSpeed : player.walkSpeed;
+  // Collision resolution (preserved from the house & key slice): the pure model
+  // only clamps to PLAY_BOUNDS, so resolve the stepped position against the box
+  // colliders here. Resolve each axis separately so the player slides along
+  // walls; zero the matching velocity on a hit so the model stops accumulating
+  // into the wall next frame.
+  let nextX = result.x;
+  let nextZ = result.z;
+  let vx = result.vx;
+  let vz = result.vz;
 
-  if (moving) {
-    player.velocity.x = THREE.MathUtils.damp(player.velocity.x, direction.x * maxSpeed, player.accel, dt);
-    player.velocity.z = THREE.MathUtils.damp(player.velocity.z, direction.z * maxSpeed, player.accel, dt);
-    player.forward.copy(direction);
-  } else {
-    player.velocity.x = THREE.MathUtils.damp(player.velocity.x, 0, player.decel, dt);
-    player.velocity.z = THREE.MathUtils.damp(player.velocity.z, 0, player.decel, dt);
-  }
-
-  const pos = player.group.position;
-  let nextX = THREE.MathUtils.clamp(pos.x + player.velocity.x * dt, PLAY_BOUNDS.x[0], PLAY_BOUNDS.x[1]);
-  let nextZ = THREE.MathUtils.clamp(pos.z + player.velocity.z * dt, PLAY_BOUNDS.z[0], PLAY_BOUNDS.z[1]);
-
-  // Resolve each axis separately so the player slides along walls instead of
-  // sticking. X is resolved against the current Z extent, then Z against the
-  // already-resolved X, which lets the player round corners cleanly.
   for (const c of colliders) {
-    const overlapZ = pos.z > c.minZ - PLAYER_RADIUS && pos.z < c.maxZ + PLAYER_RADIUS;
+    const overlapZ = motion.z > c.minZ - PLAYER_RADIUS && motion.z < c.maxZ + PLAYER_RADIUS;
     if (overlapZ && nextX > c.minX - PLAYER_RADIUS && nextX < c.maxX + PLAYER_RADIUS) {
       nextX = nextX < (c.minX + c.maxX) / 2 ? c.minX - PLAYER_RADIUS : c.maxX + PLAYER_RADIUS;
-      player.velocity.x = 0;
+      vx = 0;
     }
   }
   for (const c of colliders) {
     const overlapX = nextX > c.minX - PLAYER_RADIUS && nextX < c.maxX + PLAYER_RADIUS;
     if (overlapX && nextZ > c.minZ - PLAYER_RADIUS && nextZ < c.maxZ + PLAYER_RADIUS) {
       nextZ = nextZ < (c.minZ + c.maxZ) / 2 ? c.minZ - PLAYER_RADIUS : c.maxZ + PLAYER_RADIUS;
-      player.velocity.z = 0;
+      vz = 0;
     }
   }
 
-  player.group.position.x = nextX;
-  player.group.position.z = nextZ;
+  // Commit the resolved values back into the shared state so the next step
+  // continues from where collision left the player.
+  motion.x = nextX;
+  motion.z = nextZ;
+  motion.vx = vx;
+  motion.vz = vz;
+  motion.yaw = result.yaw;
+  motion.bob = result.bob;
 
-  player.bobTimer += dt * (running ? 7.2 : moving ? 6 : 2);
-  player.group.position.y = Math.sin(player.bobTimer) * 0.05;
-
-  if (moving) {
-    const desiredYaw = yawFromDirection(direction);
-    player.group.rotation.y = dampAngle(player.group.rotation.y, desiredYaw, 18, dt);
-  }
+  // Map the pure result onto the Three.js group. The model owns yaw integration
+  // (continuous turn at TURN_SPEED), so set rotation directly — no extra damping.
+  player.group.position.set(motion.x, Math.sin(motion.bob) * 0.05, motion.z);
+  player.group.rotation.y = motion.yaw;
 
   if (player.mixer) {
-    const runName = pickActionName(player.actions, ['Run', 'Run_Hold', 'Walk', 'Walk_Hold']);
-    const walkName = pickActionName(player.actions, ['Walk', 'Walk_Hold', 'Run', 'Run_Hold']);
-    const idleName = pickActionName(player.actions, ['Idle', 'Idle_Hold', 'Idle_Attack']);
-    playAction(player, moving ? (running ? runName : walkName) : idleName);
+    const name =
+      result.anim === 'run'
+        ? pickActionName(player.actions, ['Run', 'Run_Hold', 'Walk', 'Walk_Hold'])
+        : result.anim === 'walk'
+          ? pickActionName(player.actions, ['Walk', 'Walk_Hold', 'Run', 'Run_Hold'])
+          : pickActionName(player.actions, ['Idle', 'Idle_Hold', 'Idle_Attack']);
+    playAction(player, name);
     player.mixer.update(dt);
   }
 }
@@ -391,6 +391,24 @@ function loop(): void {
   renderer.render(scene, camera);
 }
 
+// Dev-only injection seam: feeds the exact data-channel JSON the brain will send
+// through `parseCommand` -> `applyCommand`, so the whole game-side command path
+// can be exercised before LiveKit exists. Compiled out of production builds.
+declare global {
+  interface Window {
+    __inject?: (raw: unknown) => void;
+  }
+}
+
+function installDevInjector(): void {
+  if (!import.meta.env.DEV) return;
+  window.__inject = (raw: unknown): void => {
+    const result = parseCommand(raw);
+    if (result.ok) intent = applyCommand(intent, result.command);
+    else console.warn('[__inject] rejected command:', result.error);
+  };
+}
+
 async function bootstrap(): Promise<void> {
   window.addEventListener('keydown', handleKeyDown);
   window.addEventListener('keyup', handleKeyUp);
@@ -400,8 +418,9 @@ async function bootstrap(): Promise<void> {
   createKey();
   const assetPaths = await loadManifest();
   await buildPlayer(assetPaths);
+  installDevInjector();
   dom.loading.classList.add('hidden');
-  dom.status.textContent = 'ready — move with WASD';
+  dom.status.textContent = 'ready — W drive · A/D pivot · S stop · Shift run';
   clock.start();
   renderer.setAnimationLoop(loop);
   resize();

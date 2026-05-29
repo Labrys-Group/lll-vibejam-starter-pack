@@ -5,10 +5,12 @@ import {
   type KeyboardInput,
   type MovementResult,
   type MovementState,
+  applyCommand,
   applyKeyboard,
   stepMovement,
   WALK_SPEED,
 } from "../src/movement.ts";
+import { type AgentCommand, DEFAULT_SPEED, MAX_SPEED } from "../src/commands.ts";
 import { PLAY_BOUNDS } from "../src/config.ts";
 
 const DT = 1 / 60;
@@ -188,5 +190,87 @@ describe("applyKeyboard", () => {
   it("preserves the existing intent when no keys are pressed", () => {
     const agentIntent = intent({ drive: true, run: true });
     expect(applyKeyboard(agentIntent, keys())).toEqual(agentIntent);
+  });
+});
+
+describe("applyCommand", () => {
+  it("pivot with negative degrees turns left and clears drive", () => {
+    const next = applyCommand(intent({ drive: true }), { kind: "pivot", degrees: -90 });
+    expect(next.turn).toBe(-1);
+    expect(next.drive).toBe(false);
+  });
+
+  it("pivot with positive degrees turns right", () => {
+    expect(applyCommand(intent(), { kind: "pivot", degrees: 45 }).turn).toBe(1);
+  });
+
+  it("pivot with zero degrees produces no turn", () => {
+    expect(applyCommand(intent(), { kind: "pivot", degrees: 0 }).turn).toBe(0);
+  });
+
+  it("forward drives without turning; default speed walks, faster speed runs", () => {
+    const walk = applyCommand(intent(), {
+      kind: "forward",
+      distance: 5,
+      speed: DEFAULT_SPEED,
+    });
+    expect(walk).toEqual({ turn: 0, drive: true, run: false });
+
+    const fast = applyCommand(intent(), { kind: "forward", distance: 5, speed: MAX_SPEED });
+    expect(fast.run).toBe(true);
+  });
+
+  it("stop clears turn, drive, and run", () => {
+    const next = applyCommand(intent({ turn: 1, drive: true, run: true }), { kind: "stop" });
+    expect(next).toEqual({ turn: 0, drive: false, run: false });
+  });
+
+  it("speech has no movement effect (intent unchanged)", () => {
+    const before = intent({ turn: -1, drive: true, run: true });
+    expect(applyCommand(before, { kind: "speech", speech: "on my way" })).toEqual(before);
+  });
+});
+
+describe("applyCommand — drives the same movement path", () => {
+  it("an injected forward command advances along facing and selects walk/run", () => {
+    const forward: AgentCommand = { kind: "forward", distance: 5, speed: DEFAULT_SPEED };
+    const driven = run(restState({ yaw: 0 }), applyCommand(intent(), forward), 30);
+    expect(driven.z).toBeGreaterThan(0);
+    expect(driven.x).toBeCloseTo(0, 6);
+    expect(driven.anim).toBe("walk");
+
+    const ranIntent = applyCommand(intent(), { kind: "forward", distance: 5, speed: MAX_SPEED });
+    expect(run(restState({ yaw: 0 }), ranIntent, 30).anim).toBe("run");
+  });
+
+  it("an injected pivot command changes yaw only", () => {
+    const pivoted = applyCommand(intent(), { kind: "pivot", degrees: -90 });
+    const next = stepMovement(restState({ yaw: 0 }), pivoted, DT);
+    expect(next.yaw).toBeLessThan(0);
+    expect(next.x).toBeCloseTo(0, 6);
+    expect(next.z).toBeCloseTo(0, 6);
+    expect(next.anim).toBe("idle");
+  });
+});
+
+describe("keyboard overrides agent intent", () => {
+  it("a held steering key overrides an active agent forward intent", () => {
+    const agentDriving = applyCommand(intent(), {
+      kind: "forward",
+      distance: 5,
+      speed: DEFAULT_SPEED,
+    });
+    const overridden = applyKeyboard(agentDriving, keys({ left: true }));
+    expect(overridden.turn).toBe(-1);
+    expect(overridden.drive).toBe(false);
+  });
+
+  it("the agent intent persists when no keys are pressed", () => {
+    const agentDriving = applyCommand(intent(), {
+      kind: "forward",
+      distance: 5,
+      speed: DEFAULT_SPEED,
+    });
+    expect(applyKeyboard(agentDriving, keys())).toEqual(agentDriving);
   });
 });
