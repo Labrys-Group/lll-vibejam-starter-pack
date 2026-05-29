@@ -13,11 +13,15 @@ Replace the mock injector's transport with a real LiveKit room so commands arriv
 over the data channel and the player can speak/hear the agent. Reuses the
 `parseCommand` → `applyCommand` path from issue 01 unchanged.
 
-- **Token endpoint** — a Vite dev middleware `POST /api/token` that mints a
-  room-join JWT with `livekit-server-sdk` and returns `{ token, url }`. Reads
-  `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` server-side only (never
-  bundled); add `.env.example` and load via Vite `loadEnv`. Agent dispatch is **out
-  of scope here** (issue 04). When env is missing it returns a clear error.
+- **Token fetch** — an **external token server** (run by the brain team) mints
+  the room-join JWT; we do **not** mint tokens. A browser `fetchToken(room)`
+  helper calls `GET <VITE_TOKEN_ENDPOINT>/token?room=<name>` and reads back
+  `{ token, url }` (see issue 02a). No `livekit-server-sdk`, no LiveKit secrets,
+  no server code on our side. The endpoint base URL comes from the
+  `VITE_TOKEN_ENDPOINT` env var (a public URL, not a secret); `.env.example`
+  documents it. Agent dispatch is owned by the external server, **not us**. When
+  the env var is missing or the endpoint errors, `fetchToken` returns a typed
+  "unavailable" outcome.
 - **Session shell** (`livekit-client`) — connect to the room; publish **mic only**
   (`setMicrophoneEnabled(true)`); attach agent audio on `TrackSubscribed`
   (`track.attach()`) and clean up on `TrackUnsubscribed` (`track.detach()`); handle
@@ -38,8 +42,9 @@ re-pointed at `publishData`).
 
 ## Acceptance criteria
 
-- [ ] `POST /api/token` returns `{ token, url }` with valid creds and a clear error
-      without them; secrets never reach the browser bundle.
+- [ ] `fetchToken(room)` calls the external `GET /token?room=<name>` endpoint and
+      returns `{ token, url }`; a typed "unavailable" outcome when the endpoint is
+      missing/erroring (no minting or secrets on our side).
 - [ ] Clicking Connect joins the room, publishes the mic, and plays agent audio after
       the user gesture; Disconnect cleans up tracks/audio with no zombie voices.
 - [ ] Commands sent over the data channel move the character via the issue-01 path;
