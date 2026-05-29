@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A curated "Vibe Jam" game-dev starter pack: several **independent, standalone game projects** under `projects/` plus a bonus art-workflow folder under `bonus/`, bound together by a set of **shared agent skills** kept at the repo root. There is no root-level build, package manager, or workspace — each project is self-contained and run on its own. Always open the **repo root** (not a single project) so the shared skills are visible to the agent.
 
-`projects/lll/` is currently empty. The bonus folder `bonus/vibe-isometric-sprites/` is a prompt/reference collection, not a runnable app.
+`projects/lll/` is a Three.js sandbox **forked from `forest-census`** — its long-term goal is a voice-instructed, agentic-AI-driven puzzle game (see its `README.md` roadmap; the planned `api/agent` Vercel serverless function holding the Anthropic key does not exist yet). The bonus folder `bonus/vibe-isometric-sprites/` is a prompt/reference collection, not a runnable app.
+
+`START-HERE.md` (with `README.md`) is the human entry point: it maps each starter to the idea it fits and the skills to pair with it.
 
 ## Two project archetypes
 
@@ -22,15 +24,15 @@ npm run preview  # preview the production build
 ```
 No test or lint commands are configured. Game source is real TS modules in `src/` (entry `src/main.ts`, scenes in `src/scenes/`).
 
-**2. Static, no-build** — `tinyswords/`, `toonshooter/`, `forest-census/`. **No `package.json`.** The entire game lives inline in an `index.html` and is run by serving the `public/` directory statically:
+**2. Static, no-build** — `tinyswords/`, `toonshooter/`, `forest-census/`, `lll/`. **No `package.json`.** The entire game lives inline in an `index.html` and is run by serving the `public/` directory statically:
 ```bash
-cd projects/toonshooter   # or forest-census
-serve public              # then open /toonshooter/  (or /forest/)
+cd projects/toonshooter   # or forest-census, or lll
+serve public              # then open /toonshooter/  (forest-census → /forest/, lll → /game/)
 # tinyswords: serve projects/tinyswords/public, or just open public/index.html
 ```
 - `tinyswords` loads **Phaser 3 from a CDN** (`cdn.jsdelivr.net`) via a `<script>` tag.
-- `toonshooter` and `forest-census` are **Three.js** games loaded via an `<script type="importmap">` pointing at `unpkg.com/three@0.160.0` (`three` + `three/addons/`), with all game logic in a single `<script type="module">` in `public/<game>/index.html`. The `public/index.html` at each project root is a marketing/landing page that links into `/<game>/`.
-- Both Three.js projects deploy to Vercel as static sites; `vercel.json` sets `outputDirectory: public`, `cleanUrls`, and long-cache headers for `/assets/`.
+- `toonshooter`, `forest-census`, and `lll` are **Three.js** games loaded via an `<script type="importmap">` pointing at `unpkg.com/three@0.160.0` (`three` + `three/addons/`), with all game logic in a single `<script type="module">` in `public/<game>/index.html`. The `public/index.html` at each project root is a marketing/landing page that links into `/<game>/`.
+- All three Three.js projects deploy to Vercel as static sites; `vercel.json` sets `outputDirectory: public`, `cleanUrls`, and long-cache headers for `/assets/`.
 
 ## Shared skills — edit in BOTH locations
 
@@ -46,7 +48,7 @@ The skill set is: `phaser-gamedev`, `phaser4-gamedev`, `playwright-testing`, `th
 
 Every game loads assets through a JSON manifest rather than hardcoding paths — match this when adding assets:
 - **oakwoods**: `public/assets/oakwoods/assets.json` declares spritesheets (frame size, animation frame ranges) and tilesets; `BootScene` reads it, queues loads by key, stashes the manifest in the Phaser registry, then transitions to `GameScene`.
-- **toonshooter / forest-census**: a top-level `public/assets.json` maps logical names → GLTF paths (characters, animals, environment); the game `fetch`es it at startup and loads models with `GLTFLoader`. `forest-census/public/ASSET_INDEX.md` documents the catalog.
+- **toonshooter / forest-census / lll**: a top-level `public/assets.json` maps logical names → GLTF paths (characters, animals, environment); the game `fetch`es it at startup and loads models with `GLTFLoader`. `forest-census/public/ASSET_INDEX.md` documents the catalog.
 
 Several projects ship **without their art assets** (license-restricted, e.g. the Oak Woods pack). Check the individual project's `README.md` for where to download and extract assets before assuming a missing-file error is a bug.
 
