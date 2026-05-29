@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LLL Sandbox</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      background: #0e1116;
+      color: #e8eef5;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      overflow: hidden;
+    }
+    #canvasWrap {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #scene {
+      width: min(100vw, 177.78vh);
+      height: min(100vh, 56.25vw);
+      display: block;
+      border-radius: 10px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+    }
+    #hud {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      padding: 10px 14px;
+      background: rgba(12, 16, 22, 0.62);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.5;
+      letter-spacing: 0.2px;
+      backdrop-filter: blur(6px);
+      pointer-events: none;
+    }
+    #hud b { color: #7fd1ff; font-weight: 600; }
+    #hud .title { font-size: 15px; font-weight: 700; margin-bottom: 4px; color: #fff; }
+    #loading {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      letter-spacing: 0.5px;
+      color: #9fb0c3;
+      background: #0e1116;
+      transition: opacity 0.4s ease;
+    }
+    #loading.hidden { opacity: 0; pointer-events: none; }
+    kbd {
+      display: inline-block;
+      min-width: 18px;
+      padding: 1px 5px;
+      text-align: center;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <div id="canvasWrap">
+    <canvas id="scene" width="960" height="540"></canvas>
+  </div>
+
+  <div id="hud">
+    <div class="title">LLL Sandbox</div>
+    <div>Move: <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / arrows &nbsp; Run: <kbd>Shift</kbd></div>
+    <div>Status: <b id="status">booting…</b></div>
+  </div>
+
+  <div id="loading">Loading sandbox…</div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

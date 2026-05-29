@@ -17,28 +17,44 @@ actions.
 The voice input and Claude-powered serverless agent are the next iterations
 (see roadmap below).
 
+## Tech Stack
+
+[Vite](https://vite.dev) + TypeScript, with [three.js](https://threejs.org)
+installed from npm (no CDN import maps). Two-page build: a landing page at `/`
+and the sandbox at `/game/`.
+
 ## Project Layout
 
 ```
+index.html             # Landing page → /game
+game/
+└─ index.html          # Sandbox shell (loads /src/main.ts)
+src/
+├─ config.ts           # Palette, play bounds, canvas dimensions
+├─ manifest.ts         # Asset manifest types + GLTF loading
+├─ helpers.ts          # Animation + transform helpers
+└─ main.ts             # Scene, player, input, camera, render loop
 public/
-├─ index.html          # Landing page → /game
 ├─ assets.json         # Asset manifest (shared with forest-census format)
-├─ assets/             # Quaternius GLTF models
-└─ game/
-   └─ index.html       # Three.js sandbox (all game logic inline)
+└─ assets/             # Quaternius GLTF models (served at /assets/)
+vite.config.ts         # Multi-page build config
 vercel.json            # Static hosting config (clean URLs, asset caching)
 ```
 
 ## Running Locally
 
+Uses [pnpm](https://pnpm.io).
+
 ```bash
-npm install -g serve   # or use npx serve
-serve public
+pnpm install
+pnpm dev       # Vite dev server with HMR
+pnpm build     # type-check + production bundle to dist/
+pnpm preview   # preview the production build
 ```
 
-Then visit:
-- `http://localhost:3000/` — landing page
-- `http://localhost:3000/game/` — sandbox
+The dev server prints its URL (defaults to `http://localhost:5173`). Visit:
+- `/` — landing page
+- `/game/` — sandbox
 
 ## Roadmap
 
