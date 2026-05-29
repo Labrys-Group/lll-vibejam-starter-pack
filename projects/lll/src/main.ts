@@ -88,6 +88,23 @@ const player: Player = {
 
 const cameraRig = { targetX: 0, currentX: 0, edgeThreshold: 0.55 };
 
+// ---- Collision ----------------------------------------------------------
+
+// Axis-aligned box colliders in the XZ plane (world space). Scene builders push
+// footprints here; the player resolves movement against them.
+interface BoxCollider {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
+const colliders: BoxCollider[] = [];
+
+// Half-width of the player's collision footprint, used to inflate colliders so
+// the player stops at the wall rather than clipping into it.
+const PLAYER_RADIUS = 0.5;
+
 // ---- Scene construction --------------------------------------------------
 
 function addLights(): void {
@@ -124,6 +141,123 @@ function createGround(): void {
   gridMaterial.opacity = 0.25;
   gridMaterial.transparent = true;
   scene.add(grid);
+}
+
+// A simple emoji-style house (🏠): cream box body, terracotta pyramid roof,
+// a brown door and two windows. Placed on the right (+X) edge of the play area,
+// facing the camera (+Z). Registers its wall footprint as a collider.
+function createHouse(): void {
+  const house = new THREE.Group();
+
+  const bodyWidth = 4.2;
+  const bodyHeight = 3;
+  const bodyDepth = 4.2;
+  const frontZ = bodyDepth / 2;
+
+  // Walls
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(bodyWidth, bodyHeight, bodyDepth),
+    new THREE.MeshStandardMaterial({ color: 0xe8d8b0, roughness: 0.9, metalness: 0 }),
+  );
+  body.position.y = bodyHeight / 2;
+  body.castShadow = true;
+  body.receiveShadow = true;
+  house.add(body);
+
+  // Roof — a 4-sided cone is a square pyramid; rotate 45° so faces align to walls,
+  // radius reaches the wall corners so the eaves slightly overhang.
+  const roofHeight = 2.4;
+  const roof = new THREE.Mesh(
+    new THREE.ConeGeometry((bodyWidth / 2) * Math.SQRT2 * 1.04, roofHeight, 4),
+    new THREE.MeshStandardMaterial({ color: 0xc0552f, roughness: 0.8, metalness: 0 }),
+  );
+  roof.rotation.y = Math.PI / 4;
+  roof.position.y = bodyHeight + roofHeight / 2;
+  roof.castShadow = true;
+  roof.receiveShadow = true;
+  house.add(roof);
+
+  // Door (front face, +Z)
+  const door = new THREE.Mesh(
+    new THREE.BoxGeometry(1.1, 1.7, 0.12),
+    new THREE.MeshStandardMaterial({ color: 0x6b4226, roughness: 0.7, metalness: 0 }),
+  );
+  door.position.set(0, 0.85, frontZ + 0.04);
+  door.castShadow = true;
+  house.add(door);
+
+  // Windows (front face, +Z)
+  const windowGeometry = new THREE.BoxGeometry(0.9, 0.9, 0.1);
+  const windowMaterial = new THREE.MeshStandardMaterial({
+    color: 0x9fd8ef,
+    roughness: 0.3,
+    metalness: 0.1,
+    emissive: 0x294a5a,
+    emissiveIntensity: 0.3,
+  });
+  for (const x of [-1.25, 1.25]) {
+    const win = new THREE.Mesh(windowGeometry, windowMaterial);
+    win.position.set(x, 1.9, frontZ + 0.03);
+    house.add(win);
+  }
+
+  const houseX = 19;
+  const houseZ = -1;
+  house.position.set(houseX, 0, houseZ);
+  // Door/windows are built on the +Z face, which already faces the camera — no rotation needed.
+  scene.add(house);
+
+  // Register the wall footprint so the player collides with the house.
+  colliders.push({
+    minX: houseX - bodyWidth / 2,
+    maxX: houseX + bodyWidth / 2,
+    minZ: houseZ - bodyDepth / 2,
+    maxZ: houseZ + bodyDepth / 2,
+  });
+}
+
+// A small gold key lying flat on the grass: a ring (bow), a shaft, and a couple
+// of teeth. Placed on the left (−X) side. Decorative only — no pickup logic yet.
+function createKey(): void {
+  const key = new THREE.Group();
+
+  const gold = new THREE.MeshStandardMaterial({
+    color: 0xe3b23c,
+    metalness: 0.85,
+    roughness: 0.3,
+    emissive: 0x6b4e12,
+    emissiveIntensity: 0.25,
+  });
+
+  const lift = 0.1; // rest just above the ground (ground sits at y ≈ -0.08)
+
+  // Shaft — a thin rod laid along X (cylinders default to the Y axis).
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 1.8, 16), gold);
+  shaft.rotation.z = Math.PI / 2;
+  shaft.position.set(0, lift, 0);
+  shaft.castShadow = true;
+  key.add(shaft);
+
+  // Bow — a flat ring at the left end (torus defaults to the XY plane; lay it down).
+  const bow = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.1, 12, 28), gold);
+  bow.rotation.x = Math.PI / 2;
+  bow.position.set(-1.05, lift, 0);
+  bow.castShadow = true;
+  key.add(bow);
+
+  // Teeth — two nubs near the right end, sticking out to one side (+Z).
+  const toothGeometry = new THREE.BoxGeometry(0.12, 0.14, 0.34);
+  for (const x of [0.55, 0.82]) {
+    const tooth = new THREE.Mesh(toothGeometry, gold);
+    tooth.position.set(x, lift, 0.2);
+    tooth.castShadow = true;
+    key.add(tooth);
+  }
+
+  key.position.set(-16, 0, 3);
+  key.rotation.y = 0.6; // a casual "dropped" angle
+  key.scale.setScalar(0.5);
+  scene.add(key);
 }
 
 async function buildPlayer(assetPaths: AssetPaths): Promise<void> {
@@ -191,11 +325,30 @@ function updatePlayer(dt: number): void {
     player.velocity.z = THREE.MathUtils.damp(player.velocity.z, 0, player.decel, dt);
   }
 
-  const next = player.group.position.clone().addScaledVector(player.velocity, dt);
-  next.x = THREE.MathUtils.clamp(next.x, PLAY_BOUNDS.x[0], PLAY_BOUNDS.x[1]);
-  next.z = THREE.MathUtils.clamp(next.z, PLAY_BOUNDS.z[0], PLAY_BOUNDS.z[1]);
-  player.group.position.x = next.x;
-  player.group.position.z = next.z;
+  const pos = player.group.position;
+  let nextX = THREE.MathUtils.clamp(pos.x + player.velocity.x * dt, PLAY_BOUNDS.x[0], PLAY_BOUNDS.x[1]);
+  let nextZ = THREE.MathUtils.clamp(pos.z + player.velocity.z * dt, PLAY_BOUNDS.z[0], PLAY_BOUNDS.z[1]);
+
+  // Resolve each axis separately so the player slides along walls instead of
+  // sticking. X is resolved against the current Z extent, then Z against the
+  // already-resolved X, which lets the player round corners cleanly.
+  for (const c of colliders) {
+    const overlapZ = pos.z > c.minZ - PLAYER_RADIUS && pos.z < c.maxZ + PLAYER_RADIUS;
+    if (overlapZ && nextX > c.minX - PLAYER_RADIUS && nextX < c.maxX + PLAYER_RADIUS) {
+      nextX = nextX < (c.minX + c.maxX) / 2 ? c.minX - PLAYER_RADIUS : c.maxX + PLAYER_RADIUS;
+      player.velocity.x = 0;
+    }
+  }
+  for (const c of colliders) {
+    const overlapX = nextX > c.minX - PLAYER_RADIUS && nextX < c.maxX + PLAYER_RADIUS;
+    if (overlapX && nextZ > c.minZ - PLAYER_RADIUS && nextZ < c.maxZ + PLAYER_RADIUS) {
+      nextZ = nextZ < (c.minZ + c.maxZ) / 2 ? c.minZ - PLAYER_RADIUS : c.maxZ + PLAYER_RADIUS;
+      player.velocity.z = 0;
+    }
+  }
+
+  player.group.position.x = nextX;
+  player.group.position.z = nextZ;
 
   player.bobTimer += dt * (running ? 7.2 : moving ? 6 : 2);
   player.group.position.y = Math.sin(player.bobTimer) * 0.05;
@@ -243,6 +396,8 @@ async function bootstrap(): Promise<void> {
   window.addEventListener('keyup', handleKeyUp);
   addLights();
   createGround();
+  createHouse();
+  createKey();
   const assetPaths = await loadManifest();
   await buildPlayer(assetPaths);
   dom.loading.classList.add('hidden');
