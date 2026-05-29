@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LLL</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: radial-gradient(circle at 50% 20%, #1b2738 0%, #0e1116 70%);
+      color: #e8eef5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+    }
+    .card { max-width: 560px; padding: 40px; }
+    h1 { font-size: 44px; letter-spacing: 1px; margin-bottom: 12px; }
+    p { color: #9fb0c3; line-height: 1.6; margin-bottom: 28px; }
+    a.cta {
+      display: inline-block;
+      padding: 14px 28px;
+      background: #7fd1ff;
+      color: #0e1116;
+      font-weight: 700;
+      text-decoration: none;
+      border-radius: 10px;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    a.cta:hover { transform: translateY(-2px); box-shadow: 0 10px 30px rgba(127, 209, 255, 0.3); }
+    .tag { font-size: 12px; text-transform: uppercase; letter-spacing: 2px; color: #5e7088; margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="tag">Vibe Jam · Work in progress</div>
+    <h1>LLL</h1>
+    <p>A 3D sandbox where you'll instruct a character — by voice — to solve puzzles, powered by an agentic AI brain. Right now it's a walkable baseline.</p>
+    <a class="cta" href="/game/">Enter the sandbox →</a>
+  </div>
+</body>
+</html>

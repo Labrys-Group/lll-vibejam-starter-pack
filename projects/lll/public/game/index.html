@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LLL Sandbox</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      background: #0e1116;
+      color: #e8eef5;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      overflow: hidden;
+    }
+    #canvasWrap {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #scene {
+      width: min(100vw, 177.78vh);
+      height: min(100vh, 56.25vw);
+      display: block;
+      border-radius: 10px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+    }
+    #hud {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      padding: 10px 14px;
+      background: rgba(12, 16, 22, 0.62);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.5;
+      letter-spacing: 0.2px;
+      backdrop-filter: blur(6px);
+      pointer-events: none;
+    }
+    #hud b { color: #7fd1ff; font-weight: 600; }
+    #hud .title { font-size: 15px; font-weight: 700; margin-bottom: 4px; color: #fff; }
+    #loading {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      letter-spacing: 0.5px;
+      color: #9fb0c3;
+      background: #0e1116;
+      transition: opacity 0.4s ease;
+    }
+    #loading.hidden { opacity: 0; pointer-events: none; }
+    kbd {
+      display: inline-block;
+      min-width: 18px;
+      padding: 1px 5px;
+      text-align: center;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <div id="canvasWrap">
+    <canvas id="scene" width="960" height="540"></canvas>
+  </div>
+
+  <div id="hud">
+    <div class="title">LLL Sandbox</div>
+    <div>Move: <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / arrows &nbsp; Run: <kbd>Shift</kbd></div>
+    <div>Status: <b id="status">booting…</b></div>
+  </div>
+
+  <div id="loading">Loading sandbox…</div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { clone } from 'three/addons/utils/SkeletonUtils.js';
+
+    const CANVAS_WIDTH = 960;
+    const CANVAS_HEIGHT = 540;
+
+    const COLORS = {
+      skyTop: 0xBFE8FF,
+      horizon: 0xE9FFF2,
+      grass: 0x6CC04A,
+    };
+
+    // Open, flat sandbox. Player roams freely; camera pans along X to follow.
+    const PLAY_BOUNDS = { x: [-24, 24], z: [-8, 10] };
+    const PLAYER_START = { x: 0, z: 4 };
+
+    const dom = {
+      wrap: document.getElementById('canvasWrap'),
+      canvas: document.getElementById('scene'),
+      loading: document.getElementById('loading'),
+      status: document.getElementById('status'),
+    };
+
+    const renderer = new THREE.WebGLRenderer({ canvas: dom.canvas, antialias: true });
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.setSize(CANVAS_WIDTH, CANVAS_HEIGHT, false);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(COLORS.skyTop);
+    scene.fog = new THREE.FogExp2(COLORS.horizon, 0.03);
+
+    const camera = new THREE.PerspectiveCamera(46, CANVAS_WIDTH / CANVAS_HEIGHT, 0.1, 220);
+    camera.position.set(0, 6.1, 16.2);
+    camera.lookAt(0, 1.25, 0);
+
+    const clock = new THREE.Clock();
+    const loader = new GLTFLoader();
+    const assetCache = new Map();
+
+    const input = { up: false, down: false, left: false, right: false, run: false };
+
+    const player = {
+      group: new THREE.Group(),
+      velocity: new THREE.Vector3(),
+      walkSpeed: 4.2,
+      runSpeed: 6.8,
+      accel: 18,
+      decel: 22,
+      forward: new THREE.Vector3(0, 0, -1),
+      bobTimer: 0,
+      mixer: null,
+      actions: new Map(),
+      currentAction: null,
+    };
+
+    const cameraRig = { targetX: 0, currentX: 0, edgeThreshold: 0.55 };
+
+    // ---- Asset loading -------------------------------------------------------
+
+    async function loadManifest() {
+      const manifest = await fetch('../assets.json').then((res) => res.json());
+      const resolve = (rel) =>
+        (typeof rel !== 'string' || rel.startsWith('http') || rel.startsWith('../') || rel.startsWith('/'))
+          ? rel
+          : `../${rel}`;
+      const player = resolve(manifest.assets.characters.Male_1);
+      if (!player) throw new Error('Missing player asset path');
+      return { player };
+    }
+
+    async function loadGltf(key, url) {
+      if (assetCache.has(key)) {
+        const cached = assetCache.get(key);
+        return { root: clone(cached.scene), animations: cached.animations };
+      }
+      const gltf = await loader.loadAsync(url);
+      gltf.scene.traverse((child) => {
+        if (child.isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+          if (child.material && child.material.map) {
+            child.material.map.colorSpace = THREE.SRGBColorSpace;
+          }
+        }
+      });
+      assetCache.set(key, { scene: gltf.scene, animations: gltf.animations || [] });
+      return { root: clone(gltf.scene), animations: gltf.animations || [] };
+    }
+
+    // ---- Animation + transform helpers (ported from forest-census) -----------
+
+    function yawFromDirection(direction) {
+      // This asset pack visually faces +Z at yaw=0.
+      return Math.atan2(direction.x, direction.z);
+    }
+
+    function dampAngle(current, target, lambda, dt) {
+      const tau = 1 - Math.exp(-lambda * dt);
+      const delta = THREE.MathUtils.euclideanModulo(target - current + Math.PI, Math.PI * 2) - Math.PI;
+      return current + delta * tau;
+    }
+
+    function buildActionMap(mixer, animations) {
+      const actions = new Map();
+      for (const clip of animations) {
+        const name = (clip.name || '').trim();
+        if (name) actions.set(name.toLowerCase(), mixer.clipAction(clip));
+      }
+      return actions;
+    }
+
+    function pickActionName(actions, candidates) {
+      for (const candidate of candidates) {
+        const key = candidate.toLowerCase();
+        if (actions.has(key)) return key;
+      }
+      return null;
+    }
+
+    function playAction(actor, nextName, fadeSeconds = 0.15) {
+      if (!nextName || actor.currentAction === nextName) return;
+      const next = actor.actions.get(nextName);
+      if (!next) return;
+      next.enabled = true;
+      next.reset();
+      next.fadeIn(fadeSeconds);
+      next.play();
+      if (actor.currentAction) {
+        const prev = actor.actions.get(actor.currentAction);
+        if (prev && prev !== next) prev.fadeOut(fadeSeconds);
+      }
+      actor.currentAction = nextName;
+    }
+
+    function normalizeToHeightAndGround(object, targetHeight, sink = 0.0) {
+      const boxBefore = new THREE.Box3().setFromObject(object);
+      const heightBefore = (boxBefore.max.y - boxBefore.min.y) || 1;
+      object.scale.setScalar(targetHeight / heightBefore);
+      const boxAfter = new THREE.Box3().setFromObject(object);
+      object.position.y += (-boxAfter.min.y) + sink;
+      return object;
+    }
+
+    function anchorMinYToGround(object, sink = 0) {
+      object.updateWorldMatrix(true, true);
+      object.traverse((child) => {
+        if (child.isSkinnedMesh && child.skeleton) child.skeleton.update();
+      });
+      const box = new THREE.Box3().setFromObject(object);
+      object.position.y += (-box.min.y) + sink;
+    }
+
+    // ---- Scene construction --------------------------------------------------
+
+    function addLights() {
+      scene.add(new THREE.HemisphereLight('#BFE8FF', '#E9FFF2', 0.85));
+
+      const dir = new THREE.DirectionalLight('#ffffff', 1.1);
+      dir.position.set(6, 12, 6);
+      dir.castShadow = true;
+      dir.shadow.mapSize.set(1024, 1024);
+      dir.shadow.camera.near = 1;
+      dir.shadow.camera.far = 60;
+      dir.shadow.camera.left = -30;
+      dir.shadow.camera.right = 30;
+      dir.shadow.camera.top = 20;
+      dir.shadow.camera.bottom = -20;
+      scene.add(dir);
+
+      scene.add(new THREE.AmbientLight('#ffffff', 0.15));
+    }
+
+    function createGround() {
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(80, 36, 1, 1),
+        new THREE.MeshStandardMaterial({ color: COLORS.grass, roughness: 0.85, metalness: 0 })
+      );
+      ground.rotation.x = -Math.PI / 2;
+      ground.position.y = -0.08;
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      const grid = new THREE.GridHelper(80, 40, 0x3a7a2a, 0x4f9a38);
+      grid.position.y = -0.07;
+      grid.material.opacity = 0.25;
+      grid.material.transparent = true;
+      scene.add(grid);
+    }
+
+    async function buildPlayer(assetPaths) {
+      const { root, animations } = await loadGltf('player', assetPaths.player);
+      normalizeToHeightAndGround(root, 1.6, 0);
+      player.group.add(root);
+      player.group.position.set(PLAYER_START.x, 0, PLAYER_START.z);
+
+      player.mixer = new THREE.AnimationMixer(root);
+      player.actions = buildActionMap(player.mixer, animations);
+      playAction(player, pickActionName(player.actions, ['Idle', 'Idle_Hold', 'Idle_Attack']), 0);
+      player.mixer.update(0);
+      anchorMinYToGround(root, -0.06);
+
+      player.group.rotation.y = yawFromDirection(new THREE.Vector3(0, 0, 1));
+      scene.add(player.group);
+    }
+
+    // ---- Input ---------------------------------------------------------------
+
+    function handleKeyDown(event) {
+      switch (event.code) {
+        case 'KeyW': case 'ArrowUp': input.up = true; break;
+        case 'KeyS': case 'ArrowDown': input.down = true; break;
+        case 'KeyA': case 'ArrowLeft': input.left = true; break;
+        case 'KeyD': case 'ArrowRight': input.right = true; break;
+        case 'ShiftLeft': case 'ShiftRight': input.run = true; break;
+        default: return;
+      }
+      event.preventDefault();
+    }
+
+    function handleKeyUp(event) {
+      switch (event.code) {
+        case 'KeyW': case 'ArrowUp': input.up = false; break;
+        case 'KeyS': case 'ArrowDown': input.down = false; break;
+        case 'KeyA': case 'ArrowLeft': input.left = false; break;
+        case 'KeyD': case 'ArrowRight': input.right = false; break;
+        case 'ShiftLeft': case 'ShiftRight': input.run = false; break;
+        default: return;
+      }
+      event.preventDefault();
+    }
+
+    // ---- Update loop ---------------------------------------------------------
+
+    function updatePlayer(dt) {
+      const direction = new THREE.Vector3();
+      if (input.up) direction.z -= 1;
+      if (input.down) direction.z += 1;
+      if (input.left) direction.x -= 1;
+      if (input.right) direction.x += 1;
+      direction.normalize();
+
+      const moving = direction.lengthSq() > 0;
+      const running = moving && input.run;
+      const maxSpeed = running ? player.runSpeed : player.walkSpeed;
+
+      if (moving) {
+        player.velocity.x = THREE.MathUtils.damp(player.velocity.x, direction.x * maxSpeed, player.accel, dt);
+        player.velocity.z = THREE.MathUtils.damp(player.velocity.z, direction.z * maxSpeed, player.accel, dt);
+        player.forward.copy(direction);
+      } else {
+        player.velocity.x = THREE.MathUtils.damp(player.velocity.x, 0, player.decel, dt);
+        player.velocity.z = THREE.MathUtils.damp(player.velocity.z, 0, player.decel, dt);
+      }
+
+      const next = player.group.position.clone().addScaledVector(player.velocity, dt);
+      next.x = THREE.MathUtils.clamp(next.x, PLAY_BOUNDS.x[0], PLAY_BOUNDS.x[1]);
+      next.z = THREE.MathUtils.clamp(next.z, PLAY_BOUNDS.z[0], PLAY_BOUNDS.z[1]);
+      player.group.position.x = next.x;
+      player.group.position.z = next.z;
+
+      player.bobTimer += dt * (running ? 7.2 : moving ? 6 : 2);
+      player.group.position.y = Math.sin(player.bobTimer) * 0.05;
+
+      if (moving) {
+        const desiredYaw = yawFromDirection(direction);
+        player.group.rotation.y = dampAngle(player.group.rotation.y, desiredYaw, 18, dt);
+      }
+
+      if (player.mixer) {
+        const runName = pickActionName(player.actions, ['Run', 'Run_Hold', 'Walk', 'Walk_Hold']);
+        const walkName = pickActionName(player.actions, ['Walk', 'Walk_Hold', 'Run', 'Run_Hold']);
+        const idleName = pickActionName(player.actions, ['Idle', 'Idle_Hold', 'Idle_Attack']);
+        playAction(player, moving ? (running ? runName : walkName) : idleName);
+        player.mixer.update(dt);
+      }
+    }
+
+    function updateCamera(dt) {
+      const ndc = player.group.position.clone().project(camera);
+      if (ndc.x < -cameraRig.edgeThreshold) cameraRig.targetX -= 0.14;
+      else if (ndc.x > cameraRig.edgeThreshold) cameraRig.targetX += 0.14;
+      cameraRig.targetX = THREE.MathUtils.clamp(cameraRig.targetX, PLAY_BOUNDS.x[0] + 6, PLAY_BOUNDS.x[1] - 6);
+      cameraRig.currentX = THREE.MathUtils.damp(cameraRig.currentX, cameraRig.targetX, 6.5, dt);
+      camera.position.x = cameraRig.currentX;
+      camera.lookAt(cameraRig.currentX, 1.2, 0);
+    }
+
+    function resize() {
+      const rect = dom.wrap.getBoundingClientRect();
+      renderer.domElement.style.width = `${rect.width}px`;
+      renderer.domElement.style.height = `${rect.height}px`;
+    }
+    window.addEventListener('resize', resize);
+
+    function loop() {
+      const dt = Math.min(clock.getDelta(), 0.05);
+      updatePlayer(dt);
+      updateCamera(dt);
+      renderer.render(scene, camera);
+    }
+
+    async function bootstrap() {
+      window.addEventListener('keydown', handleKeyDown);
+      window.addEventListener('keyup', handleKeyUp);
+      addLights();
+      createGround();
+      const assetPaths = await loadManifest();
+      await buildPlayer(assetPaths);
+      dom.loading.classList.add('hidden');
+      dom.status.textContent = 'ready — move with WASD';
+      clock.start();
+      renderer.setAnimationLoop(loop);
+      resize();
+    }
+
+    bootstrap().catch((err) => {
+      console.error(err);
+      dom.loading.textContent = `Failed to load: ${err.message}`;
+      dom.status.textContent = 'error';
+    });
+  </script>
+</body>
+</html>
