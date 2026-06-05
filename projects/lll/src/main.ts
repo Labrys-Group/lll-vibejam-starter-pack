@@ -522,9 +522,12 @@ function injectCommand(raw: unknown): ParseResult {
 
 // ---- Voice session (LiveKit) --------------------------------------------
 
-// Room the browser asks the external token server for. The server owns the room
-// and agent dispatch; this is just the name we request a join token for.
-const VOICE_ROOM = "lll-sandbox";
+// Room the browser asks the external token server for (sent as the `?room=` query
+// param by `fetchToken`). The server owns the room and agent dispatch; this is
+// just the name we request a join token for. It MUST match the room the agent is
+// dispatched into. Configurable via `VITE_VOICE_ROOM` so changing rooms needs no
+// code edit; falls back to `test-room`.
+const VOICE_ROOM = import.meta.env.VITE_VOICE_ROOM?.trim() || "test-room";
 
 // Stand up the LiveKit session shell and its HUD. Connect/Disconnect drive the
 // `AgentSession`; the session emits agent-state + raw inbound data back. Inbound
